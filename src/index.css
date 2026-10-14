@@ -49,3 +49,14 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 @media(max-width:680px){.sidebar{position:fixed;left:0;top:0;bottom:0;width:min(290px,85vw);min-height:100dvh;transform:translateX(-105%);transition:transform .24s ease;box-shadow:none}.sidebar-open{transform:translateX(0);box-shadow:20px 0 60px #0004}.mobile-scrim{position:fixed;inset:0;z-index:19;display:block;border:0;background:#0008}.mobile-menu,.sidebar-close{display:grid}.sidebar-close{margin-left:auto}.topbar{height:59px;padding:0 13px}.topbar-left,.topbar-actions{gap:7px}.help-button{display:none}.conversation{padding:12px 16px 0}.welcome-content{padding:12px 0 22px}.welcome-orb{width:75px;height:75px;margin-bottom:21px}.orb-core{width:50px;height:50px;border-radius:17px}.welcome-content h1{font-size:clamp(32px,8vw,43px);letter-spacing:-1.9px;margin-top:17px}.welcome-description{font-size:12px;max-width:320px}.prompt-grid{gap:8px;margin-top:27px}.prompt-card{padding:12px;min-height:112px}.prompt-card strong{font-size:10px}.prompt-card>span{font-size:9px}.prompt-arrow{right:9px;top:14px}.composer-wrap{padding:9px 12px 9px}.composer{padding:10px 10px 8px}.composer-hint{display:none}.disclaimer{font-size:8px}.statusbar{padding:0 12px;font-size:7px;letter-spacing:.45px}.statusbar>span{gap:5px}.conversation-active{padding:12px 15px 20px}.message-list{padding-top:12px}.desktop-break{display:none}}
 @media(max-width:370px){.preview-badge{display:none}.prompt-grid{grid-template-columns:1fr}.prompt-card{min-height:88px}.prompt-icon{margin-bottom:5px}.prompt-card>span{max-width:95%}.statusbar>span:last-child{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
+
+/* API connection, loading, and error states */
+.model-dot-offline{background:#ef8794;box-shadow:0 0 9px #ef879455}
+.status-dot-offline{background:#ef8794;box-shadow:0 0 7px #ef879455}
+.status-dot-warning{background:#e9bd70;box-shadow:0 0 7px #e9bd7044}
+.error-label{color:#ef8794;font:500 9px "DM Mono",monospace;letter-spacing:.5px}
+.message-error .message-avatar{background:#ef87941a;color:#ef8794}
+.message-error .message-body p{color:#e9a2aa}
+.loading-text{display:flex;align-items:center;gap:8px}
+.loading-text svg,.spin-icon{animation:warren-spin 1s linear infinite;color:var(--accent)}
+@keyframes warren-spin{to{transform:rotate(360deg)}}
