@@ -1,56 +1,80 @@
 # Warren AI
 
-A mobile-first AI assistant experience for web and Android. This repository currently contains the first frontend prototype.
+A mobile-first AI assistant for web and Android, built with React, Vite, and a Node.js API. It supports **Gemini and Groq** without exposing provider keys to the browser.
 
-## Current status
+## Current features
 
-- Responsive React + Vite interface
-- Dark/light theme toggle
-- Mobile navigation and conversation sidebar
-- New chat, local message display, search, delete, and copy actions
-- Starter prompts for studying, coding, writing, and brainstorming
-- Accessible focus states and reduced-motion support
+- Responsive chat interface with dark/light themes
+- Local browser chat history, conversation search, rename-by-first-message, and delete
+- Chat API wired to Groq and Gemini
+- Automatic provider selection: Groq first, Gemini fallback when both keys are configured
+- Input validation, request-size limits, CORS configuration, security headers, and per-IP rate limiting
+- Clear error states when keys are missing or providers are unavailable
 
-**Important:** AI generation, account authentication, and cloud conversation storage are not connected yet. Messages are only held in the current browser session. The interface clearly indicates this preview state rather than pretending a response was generated.
+**Current limitations:** Account sign-in, cloud-synced history, streaming tokens, file uploads, and the Android package are not implemented yet. Chats are stored in the current browser only.
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 18.17+ (Node 20 LTS recommended)
 - npm
+- At least one Gemini API key or Groq API key
+
+## Configure API keys
+
+1. Copy `.env.example` to `.env` in the repository root.
+2. Put your key in one or both of these server-only variables:
+   - `GEMINI_API_KEY=your_gemini_key`
+   - `GROQ_API_KEY=your_groq_key`
+3. Keep `AI_PROVIDER=auto` to try Groq first and fall back to Gemini, or set it to `groq` or `gemini` to use only one provider.
+4. Never paste keys into frontend code, commit them, or share them in chat. The root `.env` is ignored by Git.
+
+You do not need to share either API key with the developer or place it in GitHub. Add it privately in your local `.env` or your hosting provider's environment-variable settings.
 
 ## Run locally
 
+Install frontend dependencies from the repository root and API dependencies from the `server` directory:
+
 ```bash
 npm install
-npm run dev
+npm --prefix server install
 ```
 
-Open the local URL printed by Vite. To create a production build:
+Create `.env` from `.env.example`, then start both the frontend and API:
+
+```bash
+npm run dev:full
+```
+
+Open the Vite URL printed in the terminal (normally `http://localhost:5173`). The frontend proxies `/api` requests to the API on port 3000.
+
+To run separately, use `npm run dev` for the frontend and `npm run dev:server` for the API. Check API status at `http://localhost:3000/api/health`.
+
+Build the web app:
 
 ```bash
 npm run build
 npm run preview
 ```
 
-## Planned architecture
-
-- **Client:** React, Vite, CSS, Lucide icons
-- **API:** Node.js + Express
-- **Database:** MongoDB
-- **AI:** server-side integration with a supported provider such as Groq or OpenAI
-- **Android:** Capacitor wrapping the shared responsive web app
-
 ## Environment variables
 
-Copy `.env.example` to `.env` for local configuration as backend work is added. Never commit real API keys, database credentials, or authentication secrets. AI provider keys must remain on the server, not in browser code.
+| Variable | Purpose |
+| --- | --- |
+| `AI_PROVIDER` | `auto`, `groq`, or `gemini` |
+| `GROQ_API_KEY` | Secret Groq key (server only) |
+| `GEMINI_API_KEY` | Secret Gemini key (server only) |
+| `GROQ_MODEL` | Optional Groq model override |
+| `GEMINI_MODEL` | Optional Gemini model override |
+| `PORT` | API port; defaults to 3000 |
+| `CORS_ORIGINS` | Comma-separated allowed browser origins |
+| `VITE_API_BASE_URL` | Frontend API base; defaults to `/api` |
 
-## Roadmap
+## Planned next
 
-1. Complete and test the responsive UI.
-2. Add a backend API, secure authentication, and private per-user data access.
-3. Connect a real AI provider with streaming, error handling, and usage limits.
-4. Deploy the web client and API.
-5. Package and test the Android application with Capacitor.
+1. Test real provider calls with your private keys.
+2. Deploy the frontend and API and set production CORS origins.
+3. Add account authentication and cloud chat storage.
+4. Add Android packaging with Capacitor and test on a real device.
 
 ## Project
 
