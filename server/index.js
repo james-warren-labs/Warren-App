@@ -1,152 +1,241 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
+// Support both server/.env and the repository-root .env during local development.
+// Production deployments should configure secrets in the hosting dashboard.
+dotenv.config();
+dotenv.config({ path: "../.env" });
+
 const app = express();
-const port = Number(process.env.PORT || 3000);
-const provider = (process.env.AI_PROVIDER || "groq").toLowerCase();
-const maxMessageLength = 8000;
-const allowedOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:5173")
-  .split(",").map((origin) => origin.trim()).filter(Boolean);
+const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || "0.0.0.0";
+const MAX_MESSAGES = 20;
+const MAX_MESSAGE_CHARS = 12_000;
+const MAX_TOTAL_CHARS = 30_000;
+const REQUEST_TIMEOUT_MS = 60_000;
+
+const allowedOrigins = (process.env.CORS_ORIGINS ||
+  "http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,http://localhost")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
+    // Native Android clients and command-line tools may omit Origin.
     if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
     return callback(new Error("Origin is not allowed by CORS."));
   },
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+  maxAge: 600,
 }));
-app.use(express.json({ limit: "64kb" }));
+app.use(express.json({ limit: "64kb", strict: true }));
 
 const chatLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  limit: Number(process.env.CHAT_RATE_LIMIT || 12),
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.CHAT_RATE_LIMIT || 30),
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  message: { error: "Too many messages in a short time. Please wait a minute and try again." },
+  message: { error: "Too many requests. Please wait a little before trying again." },
 });
+app.use("/api/chat", chatLimiter);
 
-function getProviderConfig() {
-  if (provider === "groq") {
-    return {
-      name: "Groq",
-      key: process.env.GROQ_API_KEY,
-      model: process.env.AI_MODEL || "llama-3.3-70b-versatile",
-      url: "https://api.groq.com/openai/v1/chat/completions",
-    };
+function hasKey(provider) {
+  if (provider === "groq") return Boolean(process.env.GROQ_API_KEY);
+  if (provider === "gemini") return Boolean(process.env.GEMINI_API_KEY);
+  return false;
+}
+
+function configuredProviders() {
+  return ["groq", "gemini"].filter(hasKey);
+}
+
+function providerOrder() {
+  const requested = (process.env.AI_PROVIDER || "auto").trim().toLowerCase();
+  if (requested === "groq" || requested === "gemini") {
+    return hasKey(requested) ? [requested] : [];
   }
-  if (provider === "openai") {
-    return {
-      name: "OpenAI",
-      key: process.env.OPENAI_API_KEY,
-      model: process.env.AI_MODEL || "gpt-4o-mini",
-      url: "https://api.openai.com/v1/chat/completions",
-    };
+  if (requested !== "auto") return [];
+  // Auto mode tries Groq first, then Gemini if both keys are available.
+  return ["groq", "gemini"].filter(hasKey);
+}
+
+function validateMessages(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > MAX_MESSAGES) {
+    throw Object.assign(new Error(`Send between 1 and ${MAX_MESSAGES} messages.`), { status: 400 });
   }
-  return null;
+
+  let totalChars = 0;
+  const messages = input.map((message) => {
+    if (!message || !["user", "assistant"].includes(message.role) || typeof message.content !== "string") {
+      throw Object.assign(new Error("Each message must have a valid role and text content."), { status: 400 });
+    }
+    const content = message.content.trim();
+    if (!content || content.length > MAX_MESSAGE_CHARS) {
+      throw Object.assign(new Error(`Each message must contain 1–${MAX_MESSAGE_CHARS} characters.`), { status: 400 });
+    }
+    totalChars += content.length;
+    return { role: message.role, content };
+  });
+
+  if (totalChars > MAX_TOTAL_CHARS) {
+    throw Object.assign(new Error("This conversation is too long. Start a new chat or shorten your messages."), { status: 413 });
+  }
+  if (messages[messages.length - 1].role !== "user") {
+    throw Object.assign(new Error("The last message must be from the user."), { status: 400 });
+  }
+  return messages;
+}
+
+const SYSTEM_INSTRUCTION = [
+  "You are Warren, a helpful, clear, and friendly AI assistant.",
+  "Answer the user's actual question directly and accurately.",
+  "Use Markdown when it improves readability, including fenced code blocks for code.",
+  "If you are uncertain, say so rather than inventing facts.",
+  "For high-stakes topics, be careful and encourage checking reliable sources.",
+].join(" ");
+
+async function requestGroq(messages) {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new Error("Groq is not configured.");
+  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "system", content: SYSTEM_INSTRUCTION }, ...messages],
+      temperature: 0.7,
+      max_tokens: 2048,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || `Groq returned HTTP ${response.status}.`);
+    error.status = response.status;
+    throw error;
+  }
+  const answer = data?.choices?.[0]?.message?.content;
+  if (typeof answer !== "string" || !answer.trim()) throw new Error("Groq returned an empty response.");
+  return { answer: answer.trim(), provider: "groq", model };
+}
+
+async function requestGemini(messages) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("Gemini is not configured.");
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": key,
+      "Content-Type": "application/json",
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+      contents: messages.map((message) => ({
+        role: message.role === "assistant" ? "model" : "user",
+        parts: [{ text: message.content }],
+      })),
+      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || `Gemini returned HTTP ${response.status}.`);
+    error.status = response.status;
+    throw error;
+  }
+  const answer = data?.candidates?.[0]?.content?.parts
+    ?.map((part) => typeof part.text === "string" ? part.text : "")
+    .join("")
+    .trim();
+  if (!answer) throw new Error("Gemini returned an empty response. The request may have been blocked by a safety filter.");
+  return { answer, provider: "gemini", model };
 }
 
 app.get("/api/health", (_req, res) => {
-  const config = getProviderConfig();
+  const providers = providerOrder();
   res.json({
     ok: true,
     service: "warren-ai-api",
-    provider: config?.name || "unsupported",
-    configured: Boolean(config?.key),
+    configured: providers.length > 0,
+    provider: providers[0] || null,
+    availableProviders: configuredProviders(),
   });
 });
 
-app.post("/api/chat", chatLimiter, async (req, res) => {
-  const { messages } = req.body ?? {};
-  if (!Array.isArray(messages) || messages.length === 0 || messages.length > 20) {
-    return res.status(400).json({ error: "Send between 1 and 20 messages." });
-  }
-
-  const safeMessages = [];
-  for (const item of messages) {
-    if (!item || !["user", "assistant"].includes(item.role) ||
-        typeof item.content !== "string" || !item.content.trim() ||
-        item.content.length > maxMessageLength) {
-      return res.status(400).json({ error: "Each message must have a valid role and contain 1–8000 characters." });
-    }
-    safeMessages.push({ role: item.role, content: item.content.trim() });
-  }
-  if (safeMessages[safeMessages.length - 1].role !== "user") {
-    return res.status(400).json({ error: "The last message must be from the user." });
-  }
-
-  const config = getProviderConfig();
-  if (!config) {
-    return res.status(500).json({ error: "AI_PROVIDER must be set to groq or openai." });
-  }
-  if (!config.key) {
-    return res.status(503).json({
-      error: `AI is not configured yet. Add ${provider === "groq" ? "GROQ_API_KEY" : "OPENAI_API_KEY"} to the server environment.`,
-    });
-  }
-
+app.post("/api/chat", async (req, res) => {
+  let messages;
   try {
-    const upstream = await fetch(config.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: "system", content: "You are Warren, a helpful, honest, and clear AI assistant. Explain concepts accessibly, ask clarifying questions when useful, and do not claim to have performed actions you have not performed." },
-          ...safeMessages,
-        ],
-        temperature: 0.7,
-        max_tokens: 1600,
-      }),
-      signal: AbortSignal.timeout(45000),
-    });
-
-    const payload = await upstream.json().catch(() => ({}));
-    if (!upstream.ok) {
-      console.error("AI provider request failed:", upstream.status, payload?.error?.type || payload?.error?.code || "unknown");
-      if (upstream.status === 401 || upstream.status === 403) {
-        return res.status(502).json({ error: "The AI provider rejected the server key. Check your provider credentials." });
-      }
-      if (upstream.status === 429) {
-        return res.status(429).json({ error: "The AI provider is busy or its usage limit was reached. Please try again later." });
-      }
-      return res.status(502).json({ error: "The AI provider could not complete this request. Please try again." });
-    }
-
-    const answer = payload?.choices?.[0]?.message?.content;
-    if (typeof answer !== "string" || !answer.trim()) {
-      return res.status(502).json({ error: "The AI provider returned an empty response. Please try again." });
-    }
-    res.json({ answer: answer.trim(), provider: config.name, model: config.model });
+    messages = validateMessages(req.body?.messages);
   } catch (error) {
-    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
-    console.error("AI request error:", timedOut ? "timeout" : error?.message || "unknown");
-    res.status(timedOut ? 504 : 502).json({
-      error: timedOut ? "The AI request timed out. Please try again." : "Could not reach the AI provider. Check the server connection and try again.",
-    });
+    return res.status(error.status || 400).json({ error: error.message });
   }
+
+  const providers = providerOrder();
+  if (!providers.length) {
+    const requested = (process.env.AI_PROVIDER || "auto").trim().toLowerCase();
+    const detail = requested === "groq" || requested === "gemini"
+      ? `The selected provider (${requested}) has no API key configured.`
+      : "Add GEMINI_API_KEY or GROQ_API_KEY to the server environment.";
+    return res.status(503).json({ error: `AI is not configured. ${detail}` });
+  }
+
+  const failures = [];
+  for (const provider of providers) {
+    try {
+      const result = provider === "gemini"
+        ? await requestGemini(messages)
+        : await requestGroq(messages);
+      return res.json(result);
+    } catch (error) {
+      // Log only provider and status. Never log keys, headers, or conversation text.
+      console.error(`[${provider}] AI request failed:`, error.status || error.name || "unknown");
+      failures.push({ provider, error });
+    }
+  }
+
+  const lastFailure = failures[failures.length - 1]?.error;
+  if (failures.some(({ error }) => error?.name === "TimeoutError" || error?.name === "AbortError")) {
+    return res.status(504).json({ error: "The AI took too long to respond. Please try again." });
+  }
+  if (failures.length === 1 && lastFailure?.status === 429) {
+    return res.status(429).json({ error: "The AI provider is rate-limited or its quota is exhausted. Try again later." });
+  }
+  if (failures.length === 1 && [401, 403].includes(lastFailure?.status)) {
+    return res.status(502).json({ error: "The configured AI provider rejected its API key. Check the server environment settings." });
+  }
+  return res.status(502).json({
+    error: "Warren could not get a response from the configured AI providers. Check the server logs and provider quota, then try again.",
+  });
 });
 
 app.use((error, _req, res, _next) => {
   if (error?.type === "entity.too.large") return res.status(413).json({ error: "Request is too large." });
   if (error?.message === "Origin is not allowed by CORS.") return res.status(403).json({ error: error.message });
+  if (error instanceof SyntaxError && "body" in error) return res.status(400).json({ error: "Request body must be valid JSON." });
   console.error("API error:", error?.message || "unknown");
-  res.status(500).json({ error: "An unexpected server error occurred." });
+  return res.status(500).json({ error: "Unexpected server error." });
 });
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Warren AI API listening on port ${port}`);
-  if (!getProviderConfig()?.key) {
-    console.log("AI provider key is not configured. Add it to the server environment to enable responses.");
-  }
+app.listen(PORT, HOST, () => {
+  console.log(`Warren AI API listening on http://${HOST}:${PORT}`);
+  const providers = configuredProviders();
+  console.log(providers.length ? `Configured AI providers: ${providers.join(", ")}` : "No AI provider keys configured yet.");
 });
