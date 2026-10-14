@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:server": "npm --prefix server run dev",
+    "dev:full": "concurrently -k -n web,api \"npm run dev\" \"npm run dev:server\"",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -15,6 +17,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
     "vite": "^6.0.5"
   }
 }
